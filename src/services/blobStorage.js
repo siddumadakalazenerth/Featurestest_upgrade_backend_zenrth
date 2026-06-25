@@ -11,11 +11,33 @@ const { put, del } = require('@vercel/blob');
  * listings/{listingId}/generated/{filename}.
  */
 
+/**
+ * Vercel Blob's SDK can authenticate two different ways, and either one is
+ * valid — it does NOT require BLOB_READ_WRITE_TOKEN specifically:
+ *
+ *   1. OIDC (current default when you click "Connect" on a store from the
+ *      dashboard): Vercel injects BLOB_STORE_ID + a short-lived
+ *      VERCEL_OIDC_TOKEN that it rotates automatically. The SDK reads both
+ *      from process.env with zero code needed — no token argument, nothing.
+ *   2. BLOB_READ_WRITE_TOKEN: an older, long-lived static token. Needed for
+ *      code that runs OUTSIDE Vercel (e.g. a local script), or for client-
+ *      side browser uploads.
+ *
+ * This function only checks that *one* of those two valid setups exists —
+ * it must never hard-require BLOB_READ_WRITE_TOKEN specifically, since a
+ * project connected via OIDC will correctly never have that variable at
+ * all, and this same check would otherwise reject perfectly valid requests.
+ */
 function requireToken() {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+  const hasStaticToken = Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+  const hasOidc = Boolean(process.env.BLOB_STORE_ID && process.env.VERCEL_OIDC_TOKEN);
+
+  if (!hasStaticToken && !hasOidc) {
     throw new Error(
-      'BLOB_READ_WRITE_TOKEN is not set. Connect Vercel Blob to this project ' +
-        '(Vercel dashboard → Storage → Blob) or set the token in your local .env.'
+      'No Vercel Blob credentials found. Either connect Vercel Blob to this ' +
+        'project from the dashboard (Storage → your store → Connect — this ' +
+        'auto-injects BLOB_STORE_ID and OIDC, no token needed), or set ' +
+        'BLOB_READ_WRITE_TOKEN manually for code running outside Vercel.'
     );
   }
 }
