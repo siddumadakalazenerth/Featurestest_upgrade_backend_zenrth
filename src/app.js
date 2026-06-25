@@ -28,6 +28,19 @@ function createApp() {
     res.json({
       ok: true,
       geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+      blob: {
+        // Reports presence only — never the actual values. Use this to
+        // confirm a deployment actually has the Blob env vars before
+        // testing an upload, since env var changes never apply to a
+        // deployment that's already running.
+        hasStaticToken: Boolean(process.env.BLOB_READ_WRITE_TOKEN),
+        hasOidcStoreId: Boolean(process.env.BLOB_STORE_ID),
+        hasOidcToken: Boolean(process.env.VERCEL_OIDC_TOKEN),
+        configured: Boolean(
+          process.env.BLOB_READ_WRITE_TOKEN ||
+            (process.env.BLOB_STORE_ID && process.env.VERCEL_OIDC_TOKEN)
+        ),
+      },
       pipeline: PIPELINE,
       uploadLimits: UPLOAD_LIMITS,
       queue: getQueueStatus(),
