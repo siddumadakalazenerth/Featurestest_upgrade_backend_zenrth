@@ -7,7 +7,7 @@ const assetVersionSchema = new mongoose.Schema(
     toolJob: { type: mongoose.Schema.Types.ObjectId, ref: 'ToolJob', default: null, index: true },
     kind: { type: String, enum: ['original', 'generated'], required: true },
     url: { type: String, required: true },
-    blobUrl: { type: String, default: null }, // same value as url — kept distinct so restoreVersion can copy it onto Photo.blobUrl explicitly
+    data: { type: Buffer, default: null },
     mimeType: { type: String, required: true },
     sizeBytes: { type: Number, default: null },
     selected: { type: Boolean, default: false, index: true },

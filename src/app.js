@@ -3,6 +3,7 @@ const cors = require('cors');
 
 const listingRoutes = require('./routes/listingRoutes');
 const authRoutes = require('./routes/authRoutes');
+const imageRoutes = require('./routes/imageRoutes');
 const { listingScoped: photoListingScoped, flat: photoFlat } = require('./routes/photoRoutes');
 const { errorHandler } = require('./middleware/errorHandler');
 const { PIPELINE, UPLOAD_LIMITS } = require('./constants');
@@ -20,27 +21,15 @@ function createApp() {
   );
   app.use(express.json());
 
-  // No local static file serving — every photo URL (Photo.url, AssetVersion.url)
-  // is now a full public Vercel Blob URL, served directly from Blob/its CDN.
-  // There is nothing under this app's own domain to serve images from.
+  // All photo/version bytes live in MongoDB now (no disk, no blob storage).
+  // /api/images/photos/:photoId and /api/images/versions/:versionId stream
+  // them back out.
+  app.use('/api/images', imageRoutes);
 
   app.get('/api/health', (_req, res) => {
     res.json({
       ok: true,
       geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
-      blob: {
-        // Reports presence only — never the actual values. Use this to
-        // confirm a deployment actually has the Blob env vars before
-        // testing an upload, since env var changes never apply to a
-        // deployment that's already running.
-        hasStaticToken: Boolean(process.env.BLOB_READ_WRITE_TOKEN),
-        hasOidcStoreId: Boolean(process.env.BLOB_STORE_ID),
-        hasOidcToken: Boolean(process.env.VERCEL_OIDC_TOKEN),
-        configured: Boolean(
-          process.env.BLOB_READ_WRITE_TOKEN ||
-            (process.env.BLOB_STORE_ID && process.env.VERCEL_OIDC_TOKEN)
-        ),
-      },
       pipeline: PIPELINE,
       uploadLimits: UPLOAD_LIMITS,
       queue: getQueueStatus(),

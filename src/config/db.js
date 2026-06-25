@@ -1,17 +1,16 @@
 const dns = require('dns');
 const mongoose = require('mongoose');
 
-// On a long-running server this only ever runs once at boot. On Vercel,
-// each serverless invocation could otherwise call connectDB() from scratch —
-// slow, and risks exceeding the Atlas connection pool under concurrent
-// requests. Caching the in-flight/completed connection on a module-level
-// variable lets a warm function instance reuse it across invocations; a
-// cold start still connects fresh, same as local dev always did.
-let cachedConnection = null;
+let connectingPromise = null;
 
+// Serverless functions (Vercel) reuse the Node process between invocations,
+// so we cache the connection instead of reconnecting on every request.
 async function connectDB() {
-  if (cachedConnection && mongoose.connection.readyState === 1) {
-    return cachedConnection;
+  if (mongoose.connection.readyState === 1) {
+    return mongoose.connection;
+  }
+  if (connectingPromise) {
+    return connectingPromise;
   }
 
   const uri = process.env.MONGO_URI;
@@ -28,21 +27,23 @@ async function connectDB() {
 
   mongoose.set('strictQuery', true);
 
-  cachedConnection = await mongoose.connect(uri, {
-    dbName,
-    serverSelectionTimeoutMS: 10000,
-    // Keep the pool small — serverless functions run many short-lived
-    // instances, so each one only needs a handful of connections, not the
-    // default pool sized for one long-running process.
-    maxPoolSize: 10,
-  });
-  console.log(`[mongo] connected -> ${mongoose.connection.name}`);
+  connectingPromise = mongoose
+    .connect(uri, {
+      dbName,
+      serverSelectionTimeoutMS: 10000,
+    })
+    .then((conn) => {
+      console.log(`[mongo] connected -> ${mongoose.connection.name}`);
+      mongoose.connection.on('error', (err) => {
+        console.error('[mongo] connection error:', err.message);
+      });
+      return conn.connection;
+    })
+    .finally(() => {
+      connectingPromise = null;
+    });
 
-  mongoose.connection.on('error', (err) => {
-    console.error('[mongo] connection error:', err.message);
-  });
-
-  return cachedConnection;
+  return connectingPromise;
 }
 
 module.exports = { connectDB };

@@ -2,7 +2,6 @@ const Listing = require('../models/Listing');
 const Photo = require('../models/Photo');
 const AssetVersion = require('../models/AssetVersion');
 const ToolJob = require('../models/ToolJob');
-const { uploadBuffer, deleteByUrl, uniqueFilename } = require('../services/blobStorage');
 const {
   updatePhotoRanking,
   computeMissingRoomTypes,
@@ -25,20 +24,10 @@ function sortPhotosForDisplay(photos) {
 }
 
 /**
- * Uploads a single Multer in-memory file to Vercel Blob under a per-listing
- * folder, mirroring the old local-disk layout for readability.
- */
-async function uploadFileToBlob(listingId, file) {
-  const filename = uniqueFilename(file.originalname);
-  const pathname = `listings/${listingId}/${filename}`;
-  const { url } = await uploadBuffer(file.buffer, pathname, file.mimetype);
-  return { url, filename };
-}
-
-/**
- * Handles a multi-file upload for a listing. Each photo is saved to disk first
- * (Step 1: "raw original stored at no cost"), then run through Gemini sequentially
- * (Step 2) so a single failure doesn't take down the whole batch.
+ * Handles a multi-file upload for a listing. Each photo's bytes are stored
+ * directly in MongoDB (Step 1: "raw original stored at no cost"), then run
+ * through Gemini sequentially (Step 2) so a single failure doesn't take
+ * down the whole batch.
  */
 async function uploadPhotos(req, res, next) {
   try {
@@ -54,9 +43,6 @@ async function uploadPhotos(req, res, next) {
     const existingBytes = existingPhotos.reduce((sum, photo) => sum + photo.sizeBytes, 0);
     const incomingBytes = files.reduce((sum, file) => sum + file.size, 0);
 
-    // Nothing has been written anywhere yet at this point — files exist only
-    // as in-memory buffers (multer.memoryStorage) until uploadFileToBlob is
-    // called below, so these early-exit checks need no cleanup step.
     if (existingPhotos.length + files.length > UPLOAD_LIMITS.maxPhotosPerListing) {
       return res.status(400).json({
         error: `A property can have at most ${UPLOAD_LIMITS.maxPhotosPerListing} photos. ` +
@@ -73,33 +59,26 @@ async function uploadPhotos(req, res, next) {
 
     const createdPhotos = [];
     for (const file of files) {
-      const { url, filename } = await uploadFileToBlob(listing._id, file);
-      const photo = await Photo.create({
+      const photo = new Photo({
         listing: listing._id,
         originalName: file.originalname,
-        storedFilename: filename,
-        blobUrl: url,
-        url,
+        storedFilename: file.originalname,
+        data: file.buffer,
         mimeType: file.mimetype,
         sizeBytes: file.size,
         status: 'pending',
       });
+      photo.url = `/api/images/photos/${photo._id}`;
+      await photo.save();
       createdPhotos.push(photo);
     }
 
-    // Synchronous on Vercel (see photoQueue.js) — this genuinely runs each
-    // photo through Gemini before the response is sent. The state fetched
-    // below must happen AFTER this, or the response would describe photos
-    // that are still "pending" even though the request already waited for
-    // them to finish.
     await enqueuePhotos(createdPhotos.map((photo) => photo._id));
 
     const allPhotos = await Photo.find({ listing: listing._id }).lean();
     const assessment = await refreshPropertyAssessment(listing, allPhotos);
-    res.status(200).json({
-      uploaded: allPhotos.filter((p) =>
-        createdPhotos.some((created) => String(created._id) === String(p._id))
-      ),
+    res.status(202).json({
+      uploaded: createdPhotos.map((p) => p.toObject()),
       queued: createdPhotos.length,
       missingRoomTypes: computeMissingRoomTypes(listing, allPhotos),
       costSummary: computeCostSummary(allPhotos),
@@ -132,8 +111,7 @@ async function reanalyzePhoto(req, res, next) {
     photo.enhancementGate = 'pending';
     await photo.save();
     await enqueuePhotos([photo._id]);
-    const updated = await Photo.findById(photo._id);
-    res.status(200).json(updated);
+    res.status(202).json(photo);
   } catch (err) {
     next(err);
   }
@@ -162,14 +140,11 @@ async function replacePhoto(req, res, next) {
       return res.status(400).json({ error: 'The replacement would exceed the 5 MB property limit.' });
     }
 
-    // Validation passed — only now upload the new file and discard the old one.
-    const { url, filename } = await uploadFileToBlob(listing._id, req.file);
-    const previousUrl = photo.blobUrl;
-
     photo.originalName = req.file.originalname;
-    photo.storedFilename = filename;
-    photo.blobUrl = url;
-    photo.url = url;
+    photo.storedFilename = req.file.originalname;
+    photo.data = req.file.buffer;
+    // photo.url is left untouched — it always points at /api/images/photos/:id,
+    // which now serves whatever is currently in photo.data.
     photo.mimeType = req.file.mimetype;
     photo.sizeBytes = req.file.size;
     photo.status = 'pending';
@@ -182,16 +157,14 @@ async function replacePhoto(req, res, next) {
     photo.isCover = false;
     photo.coverRank = null;
     await photo.save();
-    await deleteByUrl(previousUrl);
-    // Clear old versions and jobs — they reference the previous file which is now deleted.
+    // Old versions/jobs referenced the previous bytes — clear them out.
     await Promise.all([
       AssetVersion.deleteMany({ photo: photo._id }),
       ToolJob.deleteMany({ photo: photo._id }),
     ]);
 
     await enqueuePhotos([photo._id]);
-    const updated = await Photo.findById(photo._id);
-    res.status(200).json(updated);
+    res.status(202).json(photo);
   } catch (err) {
     next(err);
   }
@@ -201,7 +174,6 @@ async function deletePhoto(req, res, next) {
   try {
     const photo = await Photo.findByIdAndDelete(req.params.photoId);
     if (!photo) return res.status(404).json({ error: 'Photo not found' });
-    await deleteByUrl(photo.blobUrl); // best-effort cleanup, mirrors the old disk unlink behavior
     await Promise.all([
       AssetVersion.deleteMany({ photo: photo._id }),
       ToolJob.deleteMany({ photo: photo._id }),
@@ -320,13 +292,13 @@ async function restoreVersion(req, res, next) {
       _id: req.params.versionId,
       photo: photo._id,
     });
-    if (!version || !version.blobUrl) return res.status(404).json({ error: 'Version not found' });
+    if (!version || !version.data) return res.status(404).json({ error: 'Version not found' });
     await AssetVersion.updateMany({ photo: photo._id }, { selected: false });
     version.selected = true;
     await version.save();
-    photo.url = version.url;
-    photo.blobUrl = version.blobUrl;
-    photo.storedFilename = version.blobUrl.split('/').pop();
+    // photo.url stays the same (/api/images/photos/:id) — only the bytes change.
+    photo.data = version.data;
+    photo.storedFilename = `version-${version._id}`;
     photo.mimeType = version.mimeType;
     photo.sizeBytes = version.sizeBytes || photo.sizeBytes;
     photo.status = 'pending';
@@ -334,8 +306,7 @@ async function restoreVersion(req, res, next) {
     photo.errorMessage = null;
     await photo.save();
     await enqueuePhotos([photo._id]);
-    const updated = await Photo.findById(photo._id);
-    res.status(200).json(updated);
+    res.status(202).json(photo);
   } catch (err) {
     next(err);
   }

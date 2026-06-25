@@ -233,15 +233,15 @@ async function reviewToolJob(req, res, next) {
         ? await AssetVersion.findOne({ _id: job.resultVersion, toolJob: job._id })
         : null;
       const photo = job.photo ? await Photo.findById(job.photo) : null;
-      if (!version || !photo || !version.blobUrl) {
+      if (!version || !photo || !version.data) {
         return res.status(409).json({ error: 'The generated image preview is not available.' });
       }
       await AssetVersion.updateMany({ photo: photo._id }, { selected: false });
       version.selected = true;
       await version.save();
-      photo.url = version.url;
-      photo.blobUrl = version.blobUrl;
-      photo.storedFilename = version.blobUrl.split('/').pop();
+      // photo.url is left untouched (/api/images/photos/:id) — only the bytes change.
+      photo.data = version.data;
+      photo.storedFilename = `version-${version._id}`;
       photo.mimeType = version.mimeType;
       photo.sizeBytes = version.sizeBytes || photo.sizeBytes;
       // Track which fix type was applied so assessment won't re-surface the same
@@ -282,7 +282,7 @@ async function reviewToolJob(req, res, next) {
       job.tool === 'virtual_staging'
         ? 'Plan accepted — generating the staged image now.'
         : job.resultType === 'image'
-        ? 'The approved version has been rechecked.'
+        ? 'The approved version is being rechecked automatically.'
         : 'The result was accepted.';
     await job.save();
     await audit(req, 'tool.accepted', 'ToolJob', job._id, job.listing, { tool: job.tool });
@@ -440,8 +440,7 @@ async function retryToolJob(req, res, next) {
     job.message = 'The task has been added back to the workflow.';
     await job.save();
     await enqueueToolJobs([job._id]);
-    const updated = await ToolJob.findById(job._id);
-    res.status(200).json(publicToolJob(updated));
+    res.status(202).json(publicToolJob(job));
   } catch (err) {
     next(err);
   }

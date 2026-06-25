@@ -78,11 +78,11 @@ function extractJson(text) {
 
 /**
  * Sends one photo to Gemini Flash for room-type / quality / suitability classification.
- * @param {string} imageUrl public Vercel Blob URL for the stored image
+ * @param {Buffer} fileBuffer raw image bytes (read from MongoDB, never from disk)
  * @param {string} mimeType e.g. "image/jpeg"
  * @returns {Promise<{roomType, qualityScore, suitable, issues, reasoning, raw, model}>}
  */
-async function analyzeImage(imageUrl, mimeType) {
+async function analyzeImage(fileBuffer, mimeType) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error(
@@ -90,11 +90,6 @@ async function analyzeImage(imageUrl, mimeType) {
     );
   }
 
-  const fileResponse = await fetch(imageUrl);
-  if (!fileResponse.ok) {
-    throw new Error(`Could not fetch photo from storage (${fileResponse.status}): ${imageUrl}`);
-  }
-  const fileBuffer = Buffer.from(await fileResponse.arrayBuffer());
   const base64Data = fileBuffer.toString('base64');
   const model = getModel();
 

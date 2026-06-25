@@ -40,14 +40,8 @@ const PIPELINE = {
 
 const UPLOAD_LIMITS = {
   maxPhotosPerListing: 5,
-  // Vercel's serverless functions reject any request body over 4.5 MB
-  // before your code even runs (a platform limit, not configurable). The
-  // previous 5 MB total here was already over that ceiling — a perfectly
-  // valid 5-photo upload could be rejected by Vercel itself with a generic
-  // error instead of this app's friendly message. Lowered to 4 MB total to
-  // leave headroom for multipart form overhead.
-  maxBytesPerListing: 4 * 1024 * 1024,
-  maxBytesPerFile: 4 * 1024 * 1024,
+  maxBytesPerListing: 5 * 1024 * 1024,
+  maxBytesPerFile: 5 * 1024 * 1024,
 };
 
 module.exports = {

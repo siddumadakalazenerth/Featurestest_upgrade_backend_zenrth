@@ -3,21 +3,28 @@ const Listing = require('../models/Listing');
 const { runAnalysisForPhoto, updatePhotoRanking } = require('./analysisService');
 const { refreshPropertyAssessment } = require('./propertyAssessmentService');
 
-/**
- * Serverless-safe replacement for what used to be an in-memory job queue.
- * Vercel functions don't keep a process alive between requests, so a
- * module-level `queue = []` array would reset on every invocation and lose
- * any photo that didn't finish before the function returned. Instead, this
- * runs each photo through Gemini directly, awaited inside the same request
- * that uploaded it — chosen over async/polling because Gemini Flash analysis
- * calls are fast (2-5s) and this app's max batch is 5 small photos.
- *
- * Function names are kept identical to the old queue-based version so
- * every existing call site (uploadPhotos, reanalyzePhoto, replacePhoto,
- * restoreVersion) needed zero changes.
- */
+const queue = [];
+const queuedIds = new Set();
+let processing = false;
+
 async function enqueuePhotos(photoIds) {
   for (const photoId of photoIds.map(String)) {
+    if (queuedIds.has(photoId)) continue;
+    queuedIds.add(photoId);
+    queue.push(photoId);
+  }
+  // Awaited (rather than fire-and-forget) so the work finishes before a
+  // serverless function returns its response and the process is frozen.
+  await processQueue();
+}
+
+async function processQueue() {
+  if (processing) return;
+  processing = true;
+
+  while (queue.length > 0) {
+    const photoId = queue.shift();
+    queuedIds.delete(photoId);
     try {
       const photo = await Photo.findById(photoId);
       if (!photo) continue;
@@ -29,28 +36,23 @@ async function enqueuePhotos(photoIds) {
       ]);
       if (listing) await refreshPropertyAssessment(listing, photos);
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error(`[photo-pipeline] failed for ${photoId}:`, error.message);
+      console.error(`[photo-queue] failed for ${photoId}:`, error.message);
     }
   }
+
+  processing = false;
 }
 
-/**
- * No-op on serverless: there is no boot-time moment to "resume" anything —
- * every invocation starts fresh. Kept as a function (rather than deleted)
- * so server.js's startup sequence doesn't need to change. Any photo stuck
- * in "pending" from a previous failed request will be retried the next
- * time the seller hits "reanalyze" or re-uploads.
- */
 async function resumePendingPhotos() {
-  // Intentionally empty — see comment above.
+  const pending = await Photo.find({ status: 'pending' }).sort({ createdAt: 1 }).select('_id').lean();
+  await enqueuePhotos(pending.map((photo) => photo._id));
 }
 
 function getQueueStatus() {
-  // No real queue exists anymore; every call to enqueuePhotos runs to
-  // completion before returning. Kept for API-shape compatibility with
-  // the /api/health endpoint.
-  return { waiting: 0, processing: false };
+  return {
+    waiting: queue.length,
+    processing,
+  };
 }
 
 module.exports = { enqueuePhotos, resumePendingPhotos, getQueueStatus };

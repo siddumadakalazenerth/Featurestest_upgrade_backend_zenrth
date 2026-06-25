@@ -12,6 +12,20 @@ const {
 } = require('./geminiTaskService');
 const { runGeminiImageEdit } = require('./geminiImageService');
 
+const queue = [];
+const queuedIds = new Set();
+let processing = false;
+
+async function enqueueToolJobs(ids) {
+  for (const id of ids.map(String)) {
+    if (queuedIds.has(id)) continue;
+    queuedIds.add(id);
+    queue.push(id);
+  }
+  // Awaited so the job actually finishes inside this serverless invocation.
+  await processQueue();
+}
+
 async function runJob(job) {
   const listing = await Listing.findById(job.listing).lean();
   if (!listing) throw new Error('Listing no longer exists');
@@ -83,14 +97,12 @@ async function runJob(job) {
   }
 }
 
-/**
- * Serverless-safe replacement for the old in-memory tool job queue — same
- * reasoning as photoQueue.js. Each job runs to completion (including the
- * Gemini call, which can be slow for image generation) before this function
- * returns, so every caller in the controllers must `await` it.
- */
-async function enqueueToolJobs(ids) {
-  for (const id of ids.map(String)) {
+async function processQueue() {
+  if (processing) return;
+  processing = true;
+  while (queue.length) {
+    const id = queue.shift();
+    queuedIds.delete(id);
     const job = await ToolJob.findById(id);
     if (!job || job.status !== 'queued') continue;
     try {
@@ -133,22 +145,17 @@ async function enqueueToolJobs(ids) {
       });
     }
   }
+  processing = false;
 }
 
-/**
- * No-op on serverless — see photoQueue.js's resumePendingPhotos for the same
- * reasoning. Any job left "processing" from an interrupted previous request
- * is reset to "queued" so a future explicit retry can pick it up; nothing
- * resumes automatically since there is no persistent process to do so.
- */
 async function resumeQueuedToolJobs() {
+  const jobs = await ToolJob.find({ status: { $in: ['queued', 'processing'] } }).select('_id').lean();
   await ToolJob.updateMany({ status: 'processing' }, { status: 'queued' });
+  await enqueueToolJobs(jobs.map((job) => job._id));
 }
 
 function getToolQueueStatus() {
-  // No real queue exists anymore — every enqueueToolJobs call runs to
-  // completion before returning. Kept for /api/health shape compatibility.
-  return { waiting: 0, processing: false };
+  return { waiting: queue.length, processing };
 }
 
 module.exports = { enqueueToolJobs, resumeQueuedToolJobs, getToolQueueStatus };

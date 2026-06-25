@@ -6,11 +6,8 @@ const photoSchema = new mongoose.Schema(
 
     originalName: { type: String, required: true },
     storedFilename: { type: String, required: true },
-    // Full Vercel Blob URL — this IS the file's location, so it doubles as
-    // the value used to read the file back for Gemini analysis. There is no
-    // separate local path; nothing in this app writes to the filesystem.
-    blobUrl: { type: String, required: true },
-    url: { type: String, required: true }, // same as blobUrl — kept for the API response shape the frontend expects
+    data: { type: Buffer, required: true }, // raw image bytes, stored directly in MongoDB
+    url: { type: String, required: true }, // API path that streams `data` back, e.g. /api/images/photos/:id
     mimeType: { type: String, required: true },
     sizeBytes: { type: Number, required: true },
 

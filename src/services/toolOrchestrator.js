@@ -81,7 +81,7 @@ async function createToolJob({ listing, action, prompt }) {
           photo: photo._id,
           kind: 'original',
           url: photo.url,
-          blobUrl: photo.blobUrl,
+          data: photo.data,
           mimeType: photo.mimeType,
           sizeBytes: photo.sizeBytes,
           selected: true,
@@ -110,10 +110,7 @@ async function createToolJob({ listing, action, prompt }) {
       requiresUserApproval: true,
     },
   });
-  if (status === 'queued') {
-    await enqueueToolJobs([job._id]);
-    return ToolJob.findById(job._id);
-  }
+  if (status === 'queued') await enqueueToolJobs([job._id]);
   return job;
 }
 

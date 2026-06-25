@@ -50,18 +50,10 @@ async function callGemini(parts, { json = true } = {}) {
 }
 
 async function imagePart(photo) {
-  // Files live in Vercel Blob now, not on local disk — fetch the bytes over
-  // HTTP. Blob URLs are public, so no auth header is needed here.
-  const response = await fetch(photo.blobUrl);
-  if (!response.ok) {
-    throw new Error(`Could not fetch photo from storage (${response.status}): ${photo.blobUrl}`);
-  }
-  const arrayBuffer = await response.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
   return {
     inline_data: {
       mime_type: photo.mimeType,
-      data: buffer.toString('base64'),
+      data: photo.data.toString('base64'),
     },
   };
 }

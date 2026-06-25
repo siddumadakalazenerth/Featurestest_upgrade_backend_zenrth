@@ -1,5 +1,4 @@
 const AssetVersion = require('../models/AssetVersion');
-const { uploadBuffer, uniqueFilename } = require('./blobStorage');
 const { describeGeminiError } = require('./geminiErrorMessages');
 
 function imageModel(tool) {
@@ -7,14 +6,6 @@ function imageModel(tool) {
     return process.env.GEMINI_IMAGE_MODEL_PRO || process.env.GEMINI_IMAGE_MODEL || 'gemini-3-pro-image-preview';
   }
   return process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-image';
-}
-
-function extensionForMime(mimeType) {
-  return {
-    'image/jpeg': '.jpg',
-    'image/png': '.png',
-    'image/webp': '.webp',
-  }[mimeType] || '.png';
 }
 
 function buildTruthfulPrompt(job, photo) {
@@ -89,11 +80,7 @@ Return the edited image.`;
 async function runGeminiImageEdit(job, photo) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY is not configured');
-  const sourceResponse = await fetch(photo.blobUrl);
-  if (!sourceResponse.ok) {
-    throw new Error(`Could not fetch source photo from storage (${sourceResponse.status}): ${photo.blobUrl}`);
-  }
-  const source = Buffer.from(await sourceResponse.arrayBuffer());
+  const source = photo.data; // Buffer pulled straight from MongoDB — no disk involved
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${imageModel(job.tool)}:generateContent`,
     {
@@ -170,16 +157,14 @@ async function runGeminiImageEdit(job, photo) {
 
   const mimeType = inlineData.mimeType || inlineData.mime_type || 'image/png';
   const buffer = Buffer.from(inlineData.data, 'base64');
-  const filename = uniqueFilename(`generated${extensionForMime(mimeType)}`);
-  const pathname = `listings/${job.listing}/generated/${filename}`;
-  const { url } = await uploadBuffer(buffer, pathname, mimeType);
-  const version = await AssetVersion.create({
+
+  const version = new AssetVersion({
     listing: job.listing,
     photo: photo._id,
     toolJob: job._id,
     kind: 'generated',
-    url,
-    blobUrl: url,
+    url: 'pending', // placeholder, replaced below once we know the _id
+    data: buffer,
     mimeType,
     sizeBytes: buffer.length,
     selected: false,
@@ -191,7 +176,9 @@ async function runGeminiImageEdit(job, photo) {
       synthIdExpected: true,
     },
   });
-  return { version, url };
+  version.url = `/api/images/versions/${version._id}`;
+  await version.save();
+  return { version, url: version.url };
 }
 
 module.exports = { runGeminiImageEdit };

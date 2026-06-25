@@ -1,12 +1,12 @@
 const multer = require('multer');
 const { UPLOAD_LIMITS } = require('../constants');
 
-// Serverless-safe: files are held in memory as Buffers, never written to the
-// local filesystem. Vercel's functions get a fresh, read-only-except-/tmp
-// filesystem on every invocation, so anything written to disk here would be
-// gone before the next request — sometimes before the current one finishes.
-// Controllers are responsible for uploading the buffer to Vercel Blob.
 const ALLOWED_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic']);
+
+// Images are kept in memory only long enough to be written into MongoDB
+// (req.file.buffer / req.files[i].buffer). Nothing touches disk — this is
+// required for Vercel's serverless functions, which have a read-only,
+// ephemeral filesystem.
 const storage = multer.memoryStorage();
 
 function fileFilter(_req, file, cb) {

@@ -9,7 +9,7 @@ const { PIPELINE } = require('../constants');
  */
 async function runAnalysisForPhoto(photo) {
   try {
-    const result = await analyzeImage(photo.blobUrl, photo.mimeType);
+    const result = await analyzeImage(photo.data, photo.mimeType);
 
     photo.status = 'analyzed';
     photo.analysis = {
